@@ -4,6 +4,8 @@ dotenv.config();
 import express from "express";
 import { scraperLogic } from "./scraper.js";
 import "./cron.js"
+import mongoose from "mongoose";
+const DB_URL = process.env.MONGO_URL;
 
 const app = express();
 const PORT = 3000;
@@ -28,6 +30,21 @@ app.get("/", async (req,res)=>{
 
 });
 
-app.listen(PORT , ()=>{
-  console.log(`Server running on port ${PORT}`);
-});
+const startServer = async()=>{
+
+    if(DB_URL == null){
+        throw console.error(`MONGO_DB URL Not Found`);
+        
+    }
+    
+    console.log(DB_URL);
+    await mongoose.connect(DB_URL);
+    app.listen(PORT , ()=>{
+        console.log(`Server running on port ${PORT}`);
+      });      
+
+}
+
+startServer();
+
+

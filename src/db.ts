@@ -1,8 +1,5 @@
+
 import mongoose, { Schema } from "mongoose";
-const url = process.env.MONGO_URL || "";
-
-await mongoose.connect(url);
-
 console.log("MongoDB connected");
 
 const betSchema = new Schema({
