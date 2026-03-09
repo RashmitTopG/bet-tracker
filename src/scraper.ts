@@ -1,7 +1,7 @@
-import { loginTest } from "./login.js";
+import { loginTest, type Bet } from "./login.js";
 import { Bets, Profit, Balance } from "./db.js";
 
-export const scraperLogic = async () => {
+export const scraperLogic = async (): Promise<{ date: string; profit: number; balance: number; bets: Bet[] }> => {
 
   const data = await loginTest();
 
@@ -14,19 +14,27 @@ export const scraperLogic = async () => {
   if (!date) {
     throw new Error("Date is undefined");
   }
-  const parsedDate = new Date(date);
+  // Use / instead of - to force local timezone parsing
+  const parsedDate = new Date(date.replace(/-/g, "/"));
+  parsedDate.setHours(0, 0, 0, 0);
 
   const tomorrow = new Date(parsedDate);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   // store bets
+  const filteredBets: Bet[] = [];
   if (bets) {
 
     for (const bet of bets) {
 
       if (!bet) continue;
 
-      const betDate = new Date(bet.date.replace(" ", "T"));
+      const betDate = new Date(bet.date.replace(/-/g, "/"));
+
+      // only save bets that fall within yesterday's date range
+      if (betDate < parsedDate || betDate >= tomorrow) {
+        continue;
+      }
 
       await Bets.updateOne(
         { betId: bet.betId },
@@ -41,6 +49,8 @@ export const scraperLogic = async () => {
         { upsert: true }
       );
 
+      filteredBets.push(bet);
+
     }
 
   }
@@ -51,10 +61,10 @@ export const scraperLogic = async () => {
       date: { $gte: parsedDate, $lt: tomorrow }
     },
     {
-      $set: {
+      $setOnInsert: {
         date: parsedDate,
         profit,
-        totalBets: bets?.length ?? 0
+        totalBets: filteredBets.length
       }
     },
     { upsert: true }
@@ -66,7 +76,7 @@ export const scraperLogic = async () => {
       date: { $gte: parsedDate, $lt: tomorrow }
     },
     {
-      $set: {
+      $setOnInsert: {
         date: parsedDate,
         balance
       }
@@ -78,7 +88,7 @@ export const scraperLogic = async () => {
     date,
     profit,
     balance,
-    bets
+    bets: filteredBets
   };
 
 };

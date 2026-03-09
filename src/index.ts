@@ -5,12 +5,19 @@ import express from "express";
 import { scraperLogic } from "./scraper.js";
 import "./cron.js"
 import mongoose from "mongoose";
+import betRouter from "./routes/betRoutes.js";
+import balanceRouter from "./routes/balanceRoutes.js";
+import profitRouter from "./routes/profitRoutes.js";
 const DB_URL = process.env.MONGO_URL;
 
 const app = express();
 const PORT = 3000;
 
-app.get("/", async (req,res)=>{
+app.use("/bets", betRouter);
+app.use("/balance", balanceRouter);
+app.use("/profits", profitRouter)
+
+app.get("/", async (req, res) => {
 
   try {
 
@@ -18,7 +25,7 @@ app.get("/", async (req,res)=>{
 
     res.json(data);
 
-  } catch(err) {
+  } catch (err) {
 
     console.error(err);
 
@@ -30,18 +37,18 @@ app.get("/", async (req,res)=>{
 
 });
 
-const startServer = async()=>{
+const startServer = async () => {
 
-    if(DB_URL == null){
-        throw console.error(`MONGO_DB URL Not Found`);
-        
-    }
-    
-    console.log(DB_URL);
-    await mongoose.connect(DB_URL);
-    app.listen(PORT , ()=>{
-        console.log(`Server running on port ${PORT}`);
-      });      
+  if (DB_URL == null) {
+    throw new Error(`MONGO_DB URL Not Found`);
+
+  }
+
+  console.log(DB_URL);
+  await mongoose.connect(DB_URL);
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 
 }
 

@@ -1,14 +1,45 @@
-import { chromium } from "playwright";
+import { chromium, type Request } from "playwright";
 
-export async function loginTest() {
+export interface Bet {
+  betId: string;
+  date: string;
+  eventType: string;
+  event: string;
+  amount: number;
+}
 
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+export async function loginTest(): Promise<{ balance: number; profit: number; bets: Bet[]; date: string } | undefined> {
+
+  const p = process.env.PROXIES;
+  if (p == null) {
+    throw new Error("PROXIES environment variable is not defined");
+  }
+
+  const proxies = JSON.parse(p);
+
+  // pick random proxy
+  const randomProxy = proxies[Math.floor(Math.random() * proxies.length)];
+
+  console.log(randomProxy)
+
+  if (randomProxy == null) {
+    return;
+  }
+
+  const browser = await chromium.launch({
+    headless: true,
+    proxy: {
+      server: `http://${randomProxy.proxy}:${randomProxy.port}`,
+      username: randomProxy.username,
+      password: randomProxy.password
+    }
+  });
+  const page = await browser.newPage({ ignoreHTTPSErrors: true });
 
   // -----------------------------
   // DEBUG API CALLS
   // -----------------------------
-  page.on("request", req => {
+  page.on("request", (req: Request) => {
     const url = req.url();
 
     if (url.includes("pl") || url.includes("statement")) {
@@ -22,12 +53,13 @@ export async function loginTest() {
   // -----------------------------
   await page.goto(
     `${process.env.BET_WEBSITE}`,
-    { waitUntil: "domcontentloaded", timeout: 60000 }
+    { waitUntil: "networkidle", timeout: 60000 }
   );
 
   // -----------------------------
   // LOGIN
   // -----------------------------
+  await page.waitForSelector("text=LOGIN", { timeout: 30000 });
   await page.getByText("LOGIN").click();
 
   const modal = page.locator("modal-container");
@@ -62,7 +94,7 @@ export async function loginTest() {
   // YESTERDAY DATE
   // -----------------------------
   const yesterday = new Date(Date.now() - 86400000);
-  const date = yesterday.toISOString().split("T")[0];
+  const date = yesterday.toLocaleDateString("en-CA"); // en-CA gives YYYY-MM-DD
 
   console.log("Applying filter:", date);
 
@@ -70,14 +102,14 @@ export async function loginTest() {
   const end = page.locator('input[formcontrolname="end_date"]');
 
   // Angular-safe value injection
-  await start.evaluate((el, value) => {
+  await start.evaluate((el: Element, value: string | undefined) => {
     const input = el as HTMLInputElement;
     input.value = value ?? "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }, date);
 
-  await end.evaluate((el, value) => {
+  await end.evaluate((el: Element, value: string | undefined) => {
     const input = el as HTMLInputElement;
     input.value = value ?? "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -93,13 +125,24 @@ export async function loginTest() {
   await page.click(".serach__button");
 
   await page.waitForTimeout(3000);
-  await page.waitForSelector("tr.total-tr");
+  try {
+    await page.waitForSelector("tr.total-tr", { timeout: 30000 });
+  } catch (error) {
+    console.log("No bets found for Date:", date);
+    await browser.close();
+    return {
+      balance,
+      profit: 0,
+      bets: [],
+      date
+    };
+  }
 
   // -----------------------------
   // PROFIT
   // -----------------------------
   const totalPLText = await page
-    .locator("tr.total-tr td:last-child")
+    .locator(".event___info b")
     .textContent();
 
   const profit = parseFloat(totalPLText ?? "0");
@@ -109,10 +152,10 @@ export async function loginTest() {
   // -----------------------------
   // SCRAPE BETS
   // -----------------------------
-  const bets = await page.$$eval("table tbody tr", rows =>
+  const bets = await page.$$eval("table tbody tr", (rows: HTMLTableRowElement[]) =>
     rows
-      .filter(row => !row.classList.contains("total-tr"))
-      .map(row => {
+      .filter((row: HTMLTableRowElement) => !row.classList.contains("total-tr"))
+      .map((row: HTMLTableRowElement) => {
 
         const cells = row.querySelectorAll("td");
 
@@ -132,7 +175,7 @@ export async function loginTest() {
         };
 
       })
-      .filter(Boolean)
+      .filter((b): b is Bet => b !== null)
   );
 
   console.log("Bets returned:", bets);
