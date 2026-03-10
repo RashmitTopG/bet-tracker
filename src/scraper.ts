@@ -29,12 +29,12 @@ export const scraperLogic = async (): Promise<{ date: string; profit: number; ba
 
       if (!bet) continue;
 
-      const betDate = new Date(bet.date.replace(/-/g, "/"));
+      // Append " UTC" so that the timezone isn't assumed to be local IST
+      // e.g. "2026/03/10 00:30" becomes "2026/03/10 00:30 UTC"
+      const betDate = new Date(bet.date.replace(/-/g, "/") + " UTC");
 
-      // only save bets that fall within yesterday's date range
-      if (betDate < parsedDate || betDate >= tomorrow) {
-        continue;
-      }
+      // We remove the strict `betDate < parsedDate` check here.
+      // The login.ts Angular filter already guarantees these bets belong to the target date.
 
       await Bets.updateOne(
         { betId: bet.betId },

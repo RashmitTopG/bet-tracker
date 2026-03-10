@@ -1,4 +1,6 @@
 import { chromium, type Request } from "playwright";
+import { sendMessage } from "./message.js";
+import axios from "axios";
 
 export interface Bet {
   betId: string;
@@ -10,29 +12,57 @@ export interface Bet {
 
 export async function loginTest(): Promise<{ balance: number; profit: number; bets: Bet[]; date: string } | undefined> {
 
-  const p = process.env.PROXIES;
-  if (p == null) {
-    throw new Error("PROXIES environment variable is not defined");
-  }
+  // const p = process.env.PROXIES;
+  // if (p == null) {
+  //   throw new Error("PROXIES environment variable is not defined");
+  // }
 
-  const proxies = JSON.parse(p);
+  // const proxies = JSON.parse(p);
 
-  // pick random proxy
-  const randomProxy = proxies[Math.floor(Math.random() * proxies.length)];
+  // // Shuffle proxies to pick a random order
+  // const shuffledProxies = proxies.sort(() => 0.5 - Math.random());
 
-  console.log(randomProxy)
+  // let workingProxy = null;
 
-  if (randomProxy == null) {
-    return;
-  }
+  // console.log("Testing proxies to find a working one...");
+
+  // for (const pxy of shuffledProxies) {
+  //   try {
+  //     console.log(`Testing proxy ${pxy.proxy}:${pxy.port}...`);
+  //     const proxyResult = await axios.get("http://ipv4.webshare.io/", {
+  //       timeout: 5000,
+  //       proxy: {
+  //         protocol: "http",
+  //         host: pxy.proxy,
+  //         port: parseInt(pxy.port),
+  //         auth: {
+  //           username: pxy.username,
+  //           password: pxy.password
+  //         }
+  //       }
+  //     });
+
+  //     if (proxyResult.status === 200) {
+  //       console.log(`Success: Proxy ${pxy.proxy} is working. IP shown: ${proxyResult.data}`);
+  //       workingProxy = pxy;
+  //       break; // found a working proxy, exit loop
+  //     }
+  //   } catch (error: any) {
+  //     console.log(` Failed: Proxy ${pxy.proxy} error: ${error.message}`);
+  //   }
+  // }
+
+  // if (!workingProxy) {
+  //   throw new Error("Could not find any working proxies from the list provided.");
+  // }
 
   const browser = await chromium.launch({
     headless: true,
-    proxy: {
-      server: `http://${randomProxy.proxy}:${randomProxy.port}`,
-      username: randomProxy.username,
-      password: randomProxy.password
-    }
+    // proxy: {
+    //   server: `http://${workingProxy.proxy}:${workingProxy.port}`,
+    //   username: workingProxy.username,
+    //   password: workingProxy.password
+    // }
   });
   const page = await browser.newPage({ ignoreHTTPSErrors: true });
 
@@ -63,7 +93,6 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   await page.getByText("LOGIN").click();
 
   const modal = page.locator("modal-container");
-
   await modal.locator('input[formcontrolname="username"]').fill(`${process.env.USERNAME}`);
   await modal.locator('input[formcontrolname="password"]').fill(`${process.env.PASSWORD}`);
 
@@ -74,9 +103,27 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   // -----------------------------
   // BALANCE
   // -----------------------------
-  const balanceText = await page
-    .locator("#account-menu-open-button span")
-    .textContent();
+  let balanceText: string | null = null;
+  try {
+    balanceText = await page
+      .locator("#account-menu-open-button span")
+      .textContent({ timeout: 10000 }); // reduce timeout to fail faster
+  } catch (error) {
+    console.log("\\n--- LOGIN FAILED. EXTRACTING PAGE TEXT ---");
+    try {
+      const modalText = await page.locator("modal-container").innerText();
+      console.log("MODAL TEXT:\\n", modalText);
+    } catch (e) { }
+
+    try {
+      const toastText = await page.locator(".toast-message, .ng-trigger-toastAnimation, .error-message, .alert").allInnerTexts();
+      console.log("ALERT TEXT:\\n", toastText.join("\\n"));
+    } catch (e) { }
+    console.log("-------------------------------------------\\n");
+    await page.screenshot({ path: "login-failure.png", fullPage: true });
+    await browser.close();
+    throw new Error("Could not reach dashboard after login. Check console logs above for page text.");
+  }
 
   const balance = parseFloat(balanceText ?? "0");
 
@@ -91,10 +138,27 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   await page.waitForSelector("table");
 
   // -----------------------------
-  // YESTERDAY DATE
   // -----------------------------
-  const yesterday = new Date(Date.now() - 86400000);
-  const date = yesterday.toLocaleDateString("en-CA"); // en-CA gives YYYY-MM-DD
+  // YESTERDAY DATE (UTC BASED)
+  // -----------------------------
+  // Calculate "yesterday" from a UTC perspective, as requested.
+  // regardless of the server's native timezone.
+
+  const now = new Date();
+
+  // Create an Intl.DateTimeFormat object configured for UTC timezone
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'UTC', // UTC timezone
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  // Subtract exactly 24 hours to get "yesterday"
+  const yesterday = new Date(now.getTime() - (86400000));
+
+  // Format the date explicitly in UTC
+  const date = formatter.format(yesterday);
 
   console.log("Applying filter:", date);
 
@@ -180,7 +244,18 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
 
   console.log("Bets returned:", bets);
 
+  const Betmessage = `
+  📊 Bet Report
+  
+  Date: ${date}
+  Current Balance: ${balance}
+  Profit: ${profit}
+  Total Bets: ${bets.length}
+  `;
+
   await browser.close();
+
+  await sendMessage(Betmessage)
 
   return {
     balance,
