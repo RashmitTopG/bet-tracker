@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build" : "tsc -b",
-    "dev" : "npm run build && node dist/index.js"
+    "build": "tsc -b",
+    "dev": "npm run build && node dist/index.js"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +15,7 @@
   "dependencies": {
     "@types/express": "^5.0.6",
     "@types/node-cron": "^3.0.11",
+    "axios": "^1.13.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "mongoose": "^9.2.4",

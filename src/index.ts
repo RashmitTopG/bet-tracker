@@ -11,7 +11,7 @@ import profitRouter from "./routes/profitRoutes.js";
 const DB_URL = process.env.MONGO_URL;
 
 const app = express();
-const PORT = 3000;
+const PORT = 3005;
 
 app.use("/bets", betRouter);
 app.use("/balance", balanceRouter);
