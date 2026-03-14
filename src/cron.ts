@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { scraperLogic } from "./scraper.js";
+import { withRetry } from "./utlis.js";
 
 // run every day at 06:35 AM IST to capture late-settling bets
 cron.schedule("35 6 * * *", async () => {
@@ -8,16 +9,23 @@ cron.schedule("35 6 * * *", async () => {
 
   try {
 
-    const data = await scraperLogic();
+    const data = await withRetry(
+      () => scraperLogic(),
+      3,
+      5000,
+      "Daily Scraper"
+    );
 
     console.log("Scraper result:", data);
 
   } catch (err) {
 
-    console.error("Scraper failed:", err);
+    console.error("Scraper failed after retries:", err);
 
   }
 
 }, {
   timezone: "Asia/Kolkata"
 });
+
+
