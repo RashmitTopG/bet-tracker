@@ -8,11 +8,13 @@ import mongoose from "mongoose";
 import betRouter from "./routes/betRoutes.js";
 import balanceRouter from "./routes/balanceRoutes.js";
 import profitRouter from "./routes/profitRoutes.js";
+
 const DB_URL = process.env.MONGO_URL;
 
 const app = express();
 const PORT = 3005;
 
+app.use(express.json())
 app.use("/bets", betRouter);
 app.use("/balance", balanceRouter);
 app.use("/profits", profitRouter)

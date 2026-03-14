@@ -1,6 +1,6 @@
 import { chromium, type Request } from "playwright";
 import { sendMessage } from "./message.js";
-import axios from "axios";
+import axios from "axios"
 
 export interface Bet {
   betId: string;
@@ -24,7 +24,7 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
 
   // let workingProxy = null;
 
-  // console.log("Testing proxies to find a working one...");
+  // console.log("Testing przoxies to find a working one...");
 
   // for (const pxy of shuffledProxies) {
   //   try {
@@ -58,23 +58,59 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
 
   const browser = await chromium.launch({
     headless: true,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-setuid-sandbox"
+    ],
     // proxy: {
     //   server: `http://${workingProxy.proxy}:${workingProxy.port}`,
     //   username: workingProxy.username,
     //   password: workingProxy.password
     // }
   });
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+
+  const context = await browser.newContext({
+    viewport: { width: 1920, height: 1080 },
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    deviceScaleFactor: 1,
+    ignoreHTTPSErrors: true,
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": "https://fairplaypro.com/",
+      "Origin": "https://fairplaypro.com"
+    }
+  });
+
+  // Stealth: Hide webdriver
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+  });
+
+  const page = await context.newPage();
 
   // -----------------------------
-  // DEBUG API CALLS
+  // DEBUG API CALLS & RESPONSES
   // -----------------------------
+  let loginRequested = false;
   page.on("request", (req: Request) => {
     const url = req.url();
+    if (url.includes("login") || url.includes("auth") || url.includes("authenticate")) {
+      console.log("\nLOGIN REQUEST DETECTED:", url);
+      loginRequested = true;
+    }
+  });
 
-    if (url.includes("pl") || url.includes("statement")) {
-      console.log("\nAPI REQUEST:", url);
-      console.log("BODY:", req.postData());
+  page.on("response", async (res) => {
+    const url = res.url();
+    if (url.includes("login") || url.includes("auth") || url.includes("authenticate")) {
+      console.log(`API RESPONSE [${res.status()}]:`, url);
+      if (res.status() !== 200) {
+        try {
+          const body = await res.text();
+          console.log("ERROR RESPONSE BODY:", body.substring(0, 500));
+        } catch (e) { }
+      }
     }
   });
 
@@ -93,12 +129,59 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   await page.getByText("LOGIN").click();
 
   const modal = page.locator("modal-container");
-  await modal.locator('input[formcontrolname="username"]').fill(`${process.env.USERNAME}`);
-  await modal.locator('input[formcontrolname="password"]').fill(`${process.env.PASSWORD}`);
+  const usernameInput = modal.locator('input[formcontrolname="username"]');
+  const passwordInput = modal.locator('input[formcontrolname="password"]');
 
-  await modal.locator('button[type="submit"]:not([disabled])').click();
+  console.log("Typing username...");
+  await usernameInput.click();
+  await usernameInput.fill("");
+  await page.keyboard.type(`${process.env.USERNAME}`, { delay: 150 });
+  await page.waitForTimeout(500);
 
-  await page.waitForTimeout(5000);
+  console.log("Tabbing to password...");
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(500);
+
+  console.log("Typing password...");
+  await page.keyboard.type(`${process.env.PASSWORD}`, { delay: 150 });
+  await page.waitForTimeout(1000);
+
+  const loginButton = modal.locator('button[type="submit"]');
+  const isEnabled = await loginButton.isEnabled();
+  const isVisible = await loginButton.isVisible();
+  console.log(`Login Button - Visible: ${isVisible}, Enabled: ${isEnabled}`);
+
+  console.log("Submitting via Enter key and waiting for response...");
+  const authResponsePromise = page.waitForResponse(res => res.url().includes("/p/auth") || res.url().includes("/api/auth"), { timeout: 20000 });
+
+  await page.keyboard.press("Enter");
+
+  // Wait for either the auth response, the balance indicator, or a timeout
+  try {
+    const result = await Promise.race([
+      authResponsePromise,
+      page.waitForSelector("#account-menu-open-button", { timeout: 20000 }),
+      page.waitForSelector(".toast-message, .error-message", { timeout: 20000 })
+    ]);
+    console.log("Login event/indicator detected.");
+
+    // If it was a response, log its status
+    if (typeof result !== 'boolean' && 'status' in result) {
+      console.log(`Auth Response Status: ${result.status()}`);
+      if (result.status() !== 200) {
+        const errorBody = await result.text();
+        console.log("Auth Error Details:", errorBody.substring(0, 500));
+      }
+    }
+  } catch (e) {
+    console.log("No auth response or dashboard indicators found within 20s. Trying fallback click...");
+    if (isEnabled) {
+      await loginButton.click({ force: true });
+    } else {
+      console.log("CANNOT CLICK: Login button is DISABLED.");
+    }
+    await page.waitForTimeout(5000);
+  }
 
   // -----------------------------
   // BALANCE
@@ -109,20 +192,33 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
       .locator("#account-menu-open-button span")
       .textContent({ timeout: 10000 }); // reduce timeout to fail faster
   } catch (error) {
-    console.log("\\n--- LOGIN FAILED. EXTRACTING PAGE TEXT ---");
+    console.log("\n--- LOGIN FAILED. EXTRACTING DIAGNOSTICS ---");
+    if (!loginRequested) {
+      console.log("CRITICAL: No login/auth request was even attempted by the browser.");
+    }
+    const currentUrl = page.url();
+    const currentTitle = await page.title();
+    console.log("Current URL:", currentUrl);
+    console.log("Page Title:", currentTitle);
+
     try {
       const modalText = await page.locator("modal-container").innerText();
-      console.log("MODAL TEXT:\\n", modalText);
+      if (modalText.trim()) {
+        console.log("MODAL TEXT:\n", modalText);
+      }
     } catch (e) { }
 
     try {
       const toastText = await page.locator(".toast-message, .ng-trigger-toastAnimation, .error-message, .alert").allInnerTexts();
-      console.log("ALERT TEXT:\\n", toastText.join("\\n"));
+      if (toastText.length > 0) {
+        console.log("ALERT/TOAST TEXT:\n", toastText.join("\n"));
+      }
     } catch (e) { }
-    console.log("-------------------------------------------\\n");
+
+    console.log("-------------------------------------------\n");
     await page.screenshot({ path: "login-failure.png", fullPage: true });
     await browser.close();
-    throw new Error("Could not reach dashboard after login. Check console logs above for page text.");
+    throw new Error(`Could not reach dashboard after login. URL: ${currentUrl}, Title: ${currentTitle}. Check console logs above.`);
   }
 
   const balance = parseFloat(balanceText ?? "0");
