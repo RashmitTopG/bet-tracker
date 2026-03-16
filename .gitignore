@@ -2,8 +2,3 @@ node_modules
 .env
 dist/
 bet-track-key.pem
-
-# Check retry logic 
-# Configure AWS Issue
-# Redis
-# BullMQ

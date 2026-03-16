@@ -1,6 +1,11 @@
-import { chromium, type Request } from "playwright";
+import { chromium } from "playwright-extra";
+import stealth from "puppeteer-extra-plugin-stealth";
+import { type Request } from "playwright";
 import { sendMessage } from "./message.js";
 import axios from "axios"
+
+// Initialize stealth plugin
+chromium.use(stealth());
 
 export interface Bet {
   betId: string;
@@ -12,49 +17,49 @@ export interface Bet {
 
 export async function loginTest(): Promise<{ balance: number; profit: number; bets: Bet[]; date: string } | undefined> {
 
-  // const p = process.env.PROXIES;
-  // if (p == null) {
-  //   throw new Error("PROXIES environment variable is not defined");
-  // }
+  const p = process.env.PROXIES;
+  if (p == null) {
+    throw new Error("PROXIES environment variable is not defined");
+  }
 
-  // const proxies = JSON.parse(p);
+  const proxies = JSON.parse(p);
 
-  // // Shuffle proxies to pick a random order
-  // const shuffledProxies = proxies.sort(() => 0.5 - Math.random());
+  // Shuffle proxies to pick a random order
+  const shuffledProxies = proxies.sort(() => 0.5 - Math.random());
 
-  // let workingProxy = null;
+  let workingProxy = null;
 
-  // console.log("Testing przoxies to find a working one...");
+  console.log("Testing proxies to find a working one...");
 
-  // for (const pxy of shuffledProxies) {
-  //   try {
-  //     console.log(`Testing proxy ${pxy.proxy}:${pxy.port}...`);
-  //     const proxyResult = await axios.get("http://ipv4.webshare.io/", {
-  //       timeout: 5000,
-  //       proxy: {
-  //         protocol: "http",
-  //         host: pxy.proxy,
-  //         port: parseInt(pxy.port),
-  //         auth: {
-  //           username: pxy.username,
-  //           password: pxy.password
-  //         }
-  //       }
-  //     });
+  for (const pxy of shuffledProxies) {
+    try {
+      console.log(`Testing proxy ${pxy.proxy}:${pxy.port}...`);
+      const proxyResult = await axios.get("https://google.com/", {
+        timeout: 5000,
+        proxy: {
+          protocol: "http",
+          host: pxy.proxy,
+          port: parseInt(pxy.port),
+          auth: {
+            username: pxy.username,
+            password: pxy.password
+          }
+        }
+      });
 
-  //     if (proxyResult.status === 200) {
-  //       console.log(`Success: Proxy ${pxy.proxy} is working. IP shown: ${proxyResult.data}`);
-  //       workingProxy = pxy;
-  //       break; // found a working proxy, exit loop
-  //     }
-  //   } catch (error: any) {
-  //     console.log(` Failed: Proxy ${pxy.proxy} error: ${error.message}`);
-  //   }
-  // }
+      if (proxyResult.status === 200) {
+        console.log(`Success: Proxy ${pxy.proxy} is working.`);
+        workingProxy = pxy;
+        break; // found a working proxy, exit loop
+      }
+    } catch (error: any) {
+      console.log(` Failed: Proxy ${pxy.proxy} error: ${error.message}`);
+    }
+  }
 
-  // if (!workingProxy) {
-  //   throw new Error("Could not find any working proxies from the list provided.");
-  // }
+  if (!workingProxy) {
+    console.log("WARNING: Could not find any working proxies. Proceeding WITHOUT proxy (EC2 IP).");
+  }
 
   const browser = await chromium.launch({
     headless: true,
@@ -63,28 +68,31 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
       "--no-sandbox",
       "--disable-setuid-sandbox"
     ],
-    // proxy: {
-    //   server: `http://${workingProxy.proxy}:${workingProxy.port}`,
-    //   username: workingProxy.username,
-    //   password: workingProxy.password
-    // }
+    ...(workingProxy ? {
+      proxy: {
+        server: `http://${workingProxy.proxy}:${workingProxy.port}`,
+        username: workingProxy.username,
+        password: workingProxy.password
+      }
+    } : {})
   });
 
   const context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 },
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    viewport: { width: 1440, height: 900 },
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     deviceScaleFactor: 1,
     ignoreHTTPSErrors: true,
+    locale: "en-US",
+    timezoneId: "Asia/Kolkata",
     extraHTTPHeaders: {
+      "Accept": "application/json, text/plain, */*",
       "Accept-Language": "en-US,en;q=0.9",
       "Referer": "https://fairplaypro.com/",
-      "Origin": "https://fairplaypro.com"
+      "Origin": "https://fairplaypro.com",
+      "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"macOS"'
     }
-  });
-
-  // Stealth: Hide webdriver
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => false });
   });
 
   const page = await context.newPage();
@@ -103,12 +111,12 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
 
   page.on("response", async (res) => {
     const url = res.url();
-    if (url.includes("login") || url.includes("auth") || url.includes("authenticate")) {
+    if (url.includes("login") || url.includes("auth") || url.includes("authenticate") || url.includes("api")) {
       console.log(`API RESPONSE [${res.status()}]:`, url);
       if (res.status() !== 200) {
         try {
           const body = await res.text();
-          console.log("ERROR RESPONSE BODY:", body.substring(0, 500));
+          console.log(`ERROR RESPONSE [${res.status()}]:`, body.substring(0, 500));
         } catch (e) { }
       }
     }
@@ -134,8 +142,10 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
 
   console.log("Typing username...");
   await usernameInput.click();
-  await usernameInput.fill("");
-  await page.keyboard.type(`${process.env.USERNAME}`, { delay: 150 });
+  // Ensure the field is cleared properly in a way Angular detects
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+  await usernameInput.type(`${process.env.USERNAME}`, { delay: 150 });
   await page.waitForTimeout(500);
 
   console.log("Tabbing to password...");
@@ -143,44 +153,58 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   await page.waitForTimeout(500);
 
   console.log("Typing password...");
-  await page.keyboard.type(`${process.env.PASSWORD}`, { delay: 150 });
+  await passwordInput.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+  await passwordInput.type(`${process.env.PASSWORD}`, { delay: 150 });
   await page.waitForTimeout(1000);
 
-  const loginButton = modal.locator('button[type="submit"]');
-  const isEnabled = await loginButton.isEnabled();
-  const isVisible = await loginButton.isVisible();
-  console.log(`Login Button - Visible: ${isVisible}, Enabled: ${isEnabled}`);
+  const loginButton = modal.locator('.btn-group button[type="submit"]');
+  const isEnabled = await loginButton.isEnabled().catch(() => false);
+  const isVisible = await loginButton.isVisible().catch(() => false);
 
-  console.log("Submitting via Enter key and waiting for response...");
-  const authResponsePromise = page.waitForResponse(res => res.url().includes("/p/auth") || res.url().includes("/api/auth"), { timeout: 20000 });
+  console.log(`Login Button Visible: ${isVisible}, Enabled: ${isEnabled}`);
 
+  console.log("Submitting via Click and waiting for response...");
+  const authResponsePromise = page.waitForResponse(res => res.url().includes("/p/auth") || res.url().includes("/api/auth") || res.url().includes("/login"), { timeout: 15000 }).catch(() => null);
+
+  // Click aggressively
+  await loginButton.click({ force: true, delay: 100 }).catch(() => {});
+  
+  // Also press Enter just in case the click missed the event listener
   await page.keyboard.press("Enter");
 
   // Wait for either the auth response, the balance indicator, or a timeout
   try {
+    console.log("Waiting for auth response or dashboard indicators...");
     const result = await Promise.race([
       authResponsePromise,
-      page.waitForSelector("#account-menu-open-button", { timeout: 20000 }),
-      page.waitForSelector(".toast-message, .error-message", { timeout: 20000 })
+      page.waitForSelector("#account-menu-open-button", { timeout: 20000 }).catch(() => "timeout_dashboard"),
+      page.waitForSelector(".toast-message, .error-message, .alert", { timeout: 20000 }).catch(() => "timeout_alert")
     ]);
-    console.log("Login event/indicator detected.");
+    console.log("Race finished. Result type:", typeof result === 'string' ? result : 'response object');
 
     // If it was a response, log its status
-    if (typeof result !== 'boolean' && 'status' in result) {
-      console.log(`Auth Response Status: ${result.status()}`);
+    if (result && typeof result !== 'string' && 'status' in result) {
+      console.log(`Auth Response Status Recorded: ${result.status()}`);
+      try {
+        const body = await result.text();
+        console.log("Auth Response Body Sample:", body.substring(0, 300));
+      } catch (e) {}
+      
       if (result.status() !== 200) {
-        const errorBody = await result.text();
-        console.log("Auth Error Details:", errorBody.substring(0, 500));
+        console.log("Login API failed with status", result.status());
+      } else {
+        console.log("Login API call succeeded (200 OK)!");
       }
     }
-  } catch (e) {
-    console.log("No auth response or dashboard indicators found within 20s. Trying fallback click...");
-    if (isEnabled) {
-      await loginButton.click({ force: true });
-    } else {
-      console.log("CANNOT CLICK: Login button is DISABLED.");
-    }
+    
+    // Explicitly wait for the redirect or dashboard to load
+    console.log("Waiting for dashboard DOM or potential redirect...");
     await page.waitForTimeout(5000);
+    
+  } catch (e) {
+    console.log("Error during login race:", e);
   }
 
   // -----------------------------
