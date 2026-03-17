@@ -1,5 +1,6 @@
 import { loginTest, type Bet } from "./login.js";
 import { Bets, Profit, Balance } from "./db.js";
+import { redisClient } from "./redis.js";
 
 export const scraperLogic = async (): Promise<{ date: string; profit: number; balance: number; bets: Bet[] }> => {
 
@@ -70,18 +71,39 @@ export const scraperLogic = async (): Promise<{ date: string; profit: number; ba
   );
 
   // store balance
+  const balanceUpdate = {
+    date: parsedDate,
+    balance
+  };
+
   await Balance.updateOne(
     {
       date: { $gte: parsedDate, $lt: tomorrow }
     },
     {
-      $setOnInsert: {
-        date: parsedDate,
-        balance
-      }
+      $setOnInsert: balanceUpdate
     },
     { upsert: true }
   );
+
+  // Sync with Redis
+  try {
+    
+    const dateKey = `balance:${date}`;
+    const latestKey = "balance:latest";
+
+    // Always update latest
+    await redisClient.set(latestKey, JSON.stringify(balanceUpdate), {
+      EX: 86400 // 24 hours
+    });
+
+    // Also update date-specific key
+    await redisClient.set(dateKey, JSON.stringify(balanceUpdate), {
+      EX: 604800 // 7 days
+    });
+  } catch (redisError) {
+    console.error("Failed to update Redis from scraper:", redisError);
+  }
 
   return {
     date,

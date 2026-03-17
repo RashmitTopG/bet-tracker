@@ -1,8 +1,11 @@
 import dotenv from "dotenv"
-dotenv.config()
+await dotenv.config()
 
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 export const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+export const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
+export const REDIS_HOST = process.env.REDIS_HOST;
+export const REDIS_PORT = Number(process.env.REDIS_PORT);
 
 export async function withRetry<T>(
     fn: () => Promise<T>,
