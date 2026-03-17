@@ -17,49 +17,49 @@ export interface Bet {
 
 export async function loginTest(): Promise<{ balance: number; profit: number; bets: Bet[]; date: string } | undefined> {
 
-  const p = process.env.PROXIES;
-  if (p == null) {
-    throw new Error("PROXIES environment variable is not defined");
-  }
+  // const p = process.env.PROXIES;
+  // if (p == null) {
+  //   throw new Error("PROXIES environment variable is not defined");
+  // }
 
-  const proxies = JSON.parse(p);
+  // const proxies = JSON.parse(p);
 
-  // Shuffle proxies to pick a random order
-  const shuffledProxies = proxies.sort(() => 0.5 - Math.random());
+  // // Shuffle proxies to pick a random order
+  // const shuffledProxies = proxies.sort(() => 0.5 - Math.random());
 
-  let workingProxy = null;
+  // let workingProxy = null;
 
-  console.log("Testing proxies to find a working one...");
+  // console.log("Testing proxies to find a working one...");
 
-  for (const pxy of shuffledProxies) {
-    try {
-      console.log(`Testing proxy ${pxy.proxy}:${pxy.port}...`);
-      const proxyResult = await axios.get("https://google.com/", {
-        timeout: 5000,
-        proxy: {
-          protocol: "http",
-          host: pxy.proxy,
-          port: parseInt(pxy.port),
-          auth: {
-            username: pxy.username,
-            password: pxy.password
-          }
-        }
-      });
+  // for (const pxy of shuffledProxies) {
+  //   try {
+  //     console.log(`Testing proxy ${pxy.proxy}:${pxy.port}...`);
+  //     const proxyResult = await axios.get("https://google.com/", {
+  //       timeout: 5000,
+  //       proxy: {
+  //         protocol: "http",
+  //         host: pxy.proxy,
+  //         port: parseInt(pxy.port),
+  //         auth: {
+  //           username: pxy.username,
+  //           password: pxy.password
+  //         }
+  //       }
+  //     });
 
-      if (proxyResult.status === 200) {
-        console.log(`Success: Proxy ${pxy.proxy} is working.`);
-        workingProxy = pxy;
-        break; // found a working proxy, exit loop
-      }
-    } catch (error: any) {
-      console.log(` Failed: Proxy ${pxy.proxy} error: ${error.message}`);
-    }
-  }
+  //     if (proxyResult.status === 200) {
+  //       console.log(`Success: Proxy ${pxy.proxy} is working.`);
+  //       workingProxy = pxy;
+  //       break; // found a working proxy, exit loop
+  //     }
+  //   } catch (error: any) {
+  //     console.log(` Failed: Proxy ${pxy.proxy} error: ${error.message}`);
+  //   }
+  // }
 
-  if (!workingProxy) {
-    console.log("WARNING: Could not find any working proxies. Proceeding WITHOUT proxy (EC2 IP).");
-  }
+  // if (!workingProxy) {
+  //   console.log("WARNING: Could not find any working proxies. Proceeding WITHOUT proxy (EC2 IP).");
+  // }
 
   const browser = await chromium.launch({
     headless: true,
@@ -68,13 +68,13 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
       "--no-sandbox",
       "--disable-setuid-sandbox"
     ],
-    ...(workingProxy ? {
-      proxy: {
-        server: `http://${workingProxy.proxy}:${workingProxy.port}`,
-        username: workingProxy.username,
-        password: workingProxy.password
-      }
-    } : {})
+    // ...(workingProxy ? {
+    //   proxy: {
+    //     server: `http://${workingProxy.proxy}:${workingProxy.port}`,
+    //     username: workingProxy.username,
+    //     password: workingProxy.password
+    //   }
+    // } : {})
   });
 
   const context = await browser.newContext({
@@ -169,8 +169,8 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   const authResponsePromise = page.waitForResponse(res => res.url().includes("/p/auth") || res.url().includes("/api/auth") || res.url().includes("/login"), { timeout: 15000 }).catch(() => null);
 
   // Click aggressively
-  await loginButton.click({ force: true, delay: 100 }).catch(() => {});
-  
+  await loginButton.click({ force: true, delay: 100 }).catch(() => { });
+
   // Also press Enter just in case the click missed the event listener
   await page.keyboard.press("Enter");
 
@@ -190,19 +190,19 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
       try {
         const body = await result.text();
         console.log("Auth Response Body Sample:", body.substring(0, 300));
-      } catch (e) {}
-      
+      } catch (e) { }
+
       if (result.status() !== 200) {
         console.log("Login API failed with status", result.status());
       } else {
         console.log("Login API call succeeded (200 OK)!");
       }
     }
-    
+
     // Explicitly wait for the redirect or dashboard to load
     console.log("Waiting for dashboard DOM or potential redirect...");
     await page.waitForTimeout(5000);
-    
+
   } catch (e) {
     console.log("Error during login race:", e);
   }
