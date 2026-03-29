@@ -15,7 +15,7 @@ export interface Bet {
   amount: number;
 }
 
-export async function loginTest(): Promise<{ balance: number; profit: number; bets: Bet[]; date: string } | undefined> {
+export async function loginTest(targetDate?: string): Promise<{ balance: number; profit: number; bets: Bet[]; date: string } | undefined> {
 
   // const p = process.env.PROXIES;
   // if (p == null) {
@@ -252,10 +252,32 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   // -----------------------------
   // OPEN P/L PAGE
   // -----------------------------
-  await page.click("#account-menu-open-button");
-  await page.click('a[href="/account/pl_statement"]');
+  console.log("Opening Account Menu...");
+  await page.waitForSelector("#account-menu-open-button", { state: "visible", timeout: 10000 });
+  await page.click("#account-menu-open-button", { force: true });
+  
+  console.log("Waiting for MY BETS link...");
+  try {
+    // Look for "MY BETS" link text or href
+    await page.waitForSelector('a:has-text("MY BETS"), a[href*="my_bets"], a[href*="my-bets"]', { state: "visible", timeout: 15000 });
+    await page.waitForTimeout(1000); 
+    
+    console.log("Clicking MY BETS link...");
+    await page.click('a:has-text("MY BETS"), a[href*="my_bets"], a[href*="my-bets"]', { force: true });
+  } catch (error) {
+    console.log("MY BETS link didn't appear or wasn't clickable. Taking debug screenshot...");
+    await page.screenshot({ path: "menu-debug.png" });
+    
+    // Fallback: try direct navigation
+    const currentUrl = page.url();
+    const baseUrl = new URL(currentUrl).origin;
+    const targetUrl = `${baseUrl}/account/my_bets`; 
+    console.log(`Fallback: Attempting direct navigation to ${targetUrl}`);
+    await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 30000 });
+  }
 
-  await page.waitForSelector("table");
+  console.log("Waiting for table to load...");
+  await page.waitForSelector("table", { timeout: 30000 });
 
   // -----------------------------
   // -----------------------------
@@ -277,13 +299,16 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   // Subtract exactly 24 hours to get "yesterday"
   const yesterday = new Date(now.getTime() - (86400000));
 
-  // Format the date explicitly in UTC
-  const date = formatter.format(yesterday);
+  // Format the date explicitly in UTC, or use targetDate if provided
+  const date = targetDate || formatter.format(yesterday);
 
-  console.log("Applying filter:", date);
+  // Convert YYYY-MM-DD to DD/MM/YYYY for the new UI
+  const displayDate = date.includes("-") ? date.split("-").reverse().join("/") : date;
 
-  const start = page.locator('input[formcontrolname="start_date"]');
-  const end = page.locator('input[formcontrolname="end_date"]');
+  console.log("Applying filter:", displayDate);
+
+  const start = page.locator('input[formcontrolname="start_date"], input[placeholder*="From"]');
+  const end = page.locator('input[formcontrolname="end_date"], input[placeholder*="To"]');
 
   // Angular-safe value injection
   await start.evaluate((el: Element, value: string | undefined) => {
@@ -291,28 +316,29 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
     input.value = value ?? "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
-  }, date);
+  }, displayDate);
 
   await end.evaluate((el: Element, value: string | undefined) => {
     const input = el as HTMLInputElement;
     input.value = value ?? "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
-  }, date);
+  }, displayDate);
 
-  console.log("Start date:", date);
-  console.log("End date:", date);
+  console.log("Start date:", displayDate);
+  console.log("End date:", displayDate);
 
   // -----------------------------
   // APPLY FILTER
   // -----------------------------
-  await page.click(".serach__button");
+  await page.click('button:has-text("APPLY"), .serach__button');
 
   await page.waitForTimeout(3000);
   try {
-    await page.waitForSelector("tr.total-tr", { timeout: 30000 });
+    // Wait for any row in the table
+    await page.waitForSelector("table tbody tr td", { timeout: 30000 });
   } catch (error) {
-    console.log("No bets found for Date:", date);
+    console.log("No bets found for Date:", displayDate);
     await browser.close();
     return {
       balance,
@@ -323,44 +349,44 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   }
 
   // -----------------------------
-  // PROFIT
+  // SCRAPE & CALCULATE PROFIT
   // -----------------------------
-  const totalPLText = await page
-    .locator(".event___info b")
-    .textContent();
+  const { bets, calculatedProfit } = await page.$$eval("table tbody tr", (rows: HTMLTableRowElement[], targetDatePrefix: string) => {
+    let sumProfit = 0;
+    const extractedBets = rows.map((row) => {
+      const cells = row.querySelectorAll("td");
+      if (cells.length < 7) return null;
 
-  const profit = parseFloat(totalPLText ?? "0");
+      // --- ROW-LEVEL DATE VALIDATION ---
+      // Ensures we only count bets that actually belong to the target date
+      const rowPlaceDate = cells[6]?.textContent?.trim() ?? "";
+      if (!rowPlaceDate.startsWith(targetDatePrefix)) {
+        return null; 
+      }
 
-  console.log("Profit:", profit);
+      // Extract Profit/Loss from column index 5 (6th column)
+      const pLText = cells[5]?.textContent?.trim() ?? "0";
+      const pLValue = parseFloat(pLText.replace(/,/g, ''));
+      sumProfit += pLValue;
 
-  // -----------------------------
-  // SCRAPE BETS
-  // -----------------------------
-  const bets = await page.$$eval("table tbody tr", (rows: HTMLTableRowElement[]) =>
-    rows
-      .filter((row: HTMLTableRowElement) => !row.classList.contains("total-tr"))
-      .map((row: HTMLTableRowElement) => {
+      // Extract Event Name and Bet ID link from column index 0
+      const link = cells[0]?.querySelector("a")?.getAttribute("href") ?? "";
+      const betId = link.split("/").pop() ?? `manual-${Date.now()}-${Math.random()}`;
 
-        const cells = row.querySelectorAll("td");
+      return {
+        betId,
+        date: rowPlaceDate,
+        eventType: cells[2]?.textContent?.trim() ?? "", // back/lay
+        event: cells[0]?.textContent?.trim() ?? "", // EVENT NAME
+        amount: parseFloat(cells[4]?.textContent?.trim() ?? "0")
+      };
+    }).filter(b => b !== null);
 
-        if (cells.length < 5) return null;
+    return { bets: extractedBets, calculatedProfit: sumProfit };
+  }, date);
 
-        const link =
-          cells[3]?.querySelector("a")?.getAttribute("href") ?? "";
-
-        const betId = link.split("/").pop() ?? "";
-
-        return {
-          betId,
-          date: cells[1]?.textContent?.trim() ?? "",
-          eventType: cells[2]?.textContent?.trim() ?? "",
-          event: cells[3]?.textContent?.trim() ?? "",
-          amount: parseFloat(cells[4]?.textContent?.trim() ?? "0")
-        };
-
-      })
-      .filter((b): b is Bet => b !== null)
-  );
+  const profit = calculatedProfit;
+  console.log("Manual Profit Sum Calculation:", profit);
 
   console.log("Bets returned:", bets);
 
@@ -380,7 +406,7 @@ export async function loginTest(): Promise<{ balance: number; profit: number; be
   return {
     balance,
     profit,
-    bets,
+    bets: bets as Bet[],
     date
   };
 }

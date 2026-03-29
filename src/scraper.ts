@@ -3,113 +3,143 @@ import { Bets, Profit, Balance } from "./db.js";
 import { redisClient } from "./redis.js";
 
 export const scraperLogic = async (): Promise<{ date: string; profit: number; balance: number; bets: Bet[] }> => {
+  const now = new Date();
+  let yesterdayData: any = null;
+  const summary: any[] = [];
 
-  const data = await loginTest();
+  console.log("Starting 7-day backfill check...");
 
-  if (!data) {
-    throw new Error("Scraper returned no data");
-  }
+  // Search from oldest (7 days ago) to newest (yesterday)
+  for (let i = 7; i >= 1; i--) {
+    const targetDate = new Date(now.getTime() - i * 86400000);
+    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const formattedDate = formatter.format(targetDate);
+    const parsedDate = new Date(`${formattedDate}T00:00:00.000Z`);
 
-  const { balance, profit, bets, date } = data;
+    // Check if we already have profit data for this date
+    const existingProfit = await Profit.findOne({ date: parsedDate });
+    
+    if (existingProfit) {
+      console.log(`[${formattedDate}] Data already exists. Skipping.`);
+      
+      summary.push({
+        Date: formattedDate,
+        Profit: existingProfit.profit,
+        Bets: existingProfit.totalBets || 0,
+        Status: "Existing"
+      });
 
-  if (!date) {
-    throw new Error("Date is undefined");
-  }
-
-  // Set the "day start" explicitly as UTC midnight
-  // So '2026-03-10' becomes '2026-03-10T00:00:00.000Z'
-  const parsedDate = new Date(`${date}T00:00:00.000Z`);
-
-  const tomorrow = new Date(parsedDate);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-
-  // store bets
-  const filteredBets: Bet[] = [];
-  if (bets) {
-
-    for (const bet of bets) {
-
-      if (!bet) continue;
-
-      // The website displays time in IST (UTC+05:30).
-      // Append "+05:30" so that JS converts it correctly into UTC.
-      // e.g. "2026/03/11 03:50" -> "2026-03-10T22:20:00.000Z" (which correctly belongs to March 10th UTC)
-      const betDate = new Date(bet.date.replace(/-/g, "/") + " +05:30");
-
-      await Bets.updateOne(
-        { betId: bet.betId },
-        {
-          $set: {
-            date: betDate,
-            eventType: bet.eventType,
-            event: bet.event,
-            amount: bet.amount
-          }
-        },
-        { upsert: true }
-      );
-
-      filteredBets.push(bet);
-
+      // If it's yesterday (i=1), we fetch the full data from DB to return it
+      if (i === 1) {
+        const existingBalance = await Balance.findOne({ date: { $gte: parsedDate, $lt: new Date(parsedDate.getTime() + 86400000) } });
+        const existingBets = await Bets.find({ 
+          date: { $gte: parsedDate, $lt: new Date(parsedDate.getTime() + 86400000) } 
+        });
+        
+        yesterdayData = {
+          date: formattedDate,
+          profit: existingProfit.profit,
+          balance: existingBalance?.balance || 0,
+          bets: existingBets as unknown as Bet[]
+        };
+      }
+      continue;
     }
 
-  }
+    console.log(`[${formattedDate}] Data missing. Scraping...`);
+    const data = await loginTest(formattedDate);
 
-  // store profit
-  await Profit.updateOne(
-    {
-      date: { $gte: parsedDate, $lt: tomorrow }
-    },
-    {
-      $setOnInsert: {
-        date: parsedDate,
-        profit,
-        totalBets: filteredBets.length
+    if (!data) {
+      console.error(`[${formattedDate}] Scraper returned no data.`);
+      summary.push({ Date: formattedDate, Profit: 0, Bets: 0, Status: "Failed" });
+      continue;
+    }
+
+    const { balance, profit, bets, date } = data;
+    const tomorrow = new Date(parsedDate);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    // store bets
+    const filteredBets: Bet[] = [];
+    if (bets) {
+      for (const bet of bets) {
+        if (!bet) continue;
+        const betDate = new Date(bet.date.replace(/-/g, "/") + " +05:30");
+        await Bets.updateOne(
+          { betId: bet.betId },
+          {
+            $set: {
+              date: betDate,
+              eventType: bet.eventType,
+              event: bet.event,
+              amount: bet.amount
+            }
+          },
+          { upsert: true }
+        );
+        filteredBets.push(bet);
       }
-    },
-    { upsert: true }
-  );
+    }
 
-  // store balance
-  const balanceUpdate = {
-    date: parsedDate,
-    balance
-  };
+    // store profit (always create a record, even if profit is 0, to avoid re-scraping)
+    await Profit.updateOne(
+      { date: { $gte: parsedDate, $lt: tomorrow } },
+      {
+        $setOnInsert: {
+          date: parsedDate,
+          profit,
+          totalBets: filteredBets.length
+        }
+      },
+      { upsert: true }
+    );
 
-  await Balance.updateOne(
-    {
-      date: { $gte: parsedDate, $lt: tomorrow }
-    },
-    {
-      $setOnInsert: balanceUpdate
-    },
-    { upsert: true }
-  );
+    // store balance
+    const balanceUpdate = {
+      date: parsedDate,
+      balance
+    };
+    await Balance.updateOne(
+      { date: { $gte: parsedDate, $lt: tomorrow } },
+      { $setOnInsert: balanceUpdate },
+      { upsert: true }
+    );
 
-  // Sync with Redis
-  try {
-    
-    const dateKey = `balance:${date}`;
-    const latestKey = "balance:latest";
+    // Sync with Redis
+    try {
+      const dateKey = `balance:${date}`;
+      const latestKey = "balance:latest";
+      await redisClient.set(latestKey, JSON.stringify(balanceUpdate), { EX: 86400 });
+      await redisClient.set(dateKey, JSON.stringify(balanceUpdate), { EX: 604800 });
+    } catch (redisError) {
+      console.error("Failed to update Redis from scraper:", redisError);
+    }
 
-    // Always update latest
-    await redisClient.set(latestKey, JSON.stringify(balanceUpdate), {
-      EX: 86400 // 24 hours
+    summary.push({
+      Date: formattedDate,
+      Profit: profit,
+      Bets: filteredBets.length,
+      Status: "Scraped"
     });
 
-    // Also update date-specific key
-    await redisClient.set(dateKey, JSON.stringify(balanceUpdate), {
-      EX: 604800 // 7 days
-    });
-  } catch (redisError) {
-    console.error("Failed to update Redis from scraper:", redisError);
+    if (i === 1) {
+      yesterdayData = {
+        date: formattedDate,
+        profit,
+        balance,
+        bets: filteredBets
+      };
+    }
   }
 
-  return {
-    date,
-    profit,
-    balance,
-    bets: filteredBets
-  };
+  // Display summary of all 7 days in the console
+  console.log("\n--- 7-DAY RESULTS SUMMARY ---");
+  console.table(summary);
+  console.log("-----------------------------\n");
 
+  if (!yesterdayData) {
+    throw new Error("Scraper could not retrieve or find data for yesterday (the report date).");
+  }
+
+  return yesterdayData;
 };
